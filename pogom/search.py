@@ -423,6 +423,9 @@ def search_worker_thread(args, account_queue, account_failures, search_items_que
 
             api.activate_signature(encryption_lib_path)
 
+            # Save last search args
+            last_search_args = None
+
             # The forever loop for the searches
             while True:
 
@@ -448,6 +451,20 @@ def search_worker_thread(args, account_queue, account_failures, search_items_que
                 # Grab the next thing to search (when available)
                 status['message'] = 'Waiting for item from queue'
                 step, step_location, appears, leaves = search_items_queue.get()
+
+                # Check if were hex searching that we're not moving to fast if we're skipping steps
+                if last_search_args is not None:
+                    last_location, last_time = last_search_args
+
+                    # 0.02 km/s = 72 km/h
+                    moving_distance = calc_distance(last_location, step_location)
+                    time_needed = moving_distance / 0.02
+                    if time_needed > (now() - last_time):
+                        # wait max acc search time
+                        wait = max(time_needed - (now() - last_time), 2 * (now() - last_time))
+                        moving_speed = moving_distance * 3600 / (now() - last_time)
+                        log.info('Moving too fast ({:.0f} km/h), waiting {:.0f}'.format(moving_speed, wait))
+                        time.sleep(wait)
 
                 # too soon?
                 if appears and now() < appears + 10:  # adding a 10 second grace period
@@ -488,6 +505,9 @@ def search_worker_thread(args, account_queue, account_failures, search_items_que
 
                 # Make the actual request (finally!)
                 response_dict = map_request(api, step_location, args.jitter)
+
+                # Set last step args
+                last_search_args = step_location, now()
 
                 # G'damnit, nothing back. Mark it up, sleep, carry on
                 if not response_dict:
